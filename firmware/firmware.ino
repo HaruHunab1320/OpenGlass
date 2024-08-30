@@ -20,8 +20,8 @@
 // uncomment CODEC_MULAW
 
 // #define CODEC_OPUS
-// #define CODEC_MULAW
-#define CODEC_PCM
+#define CODEC_MULAW
+// #define CODEC_PCM
 
 #ifdef CODEC_OPUS
 

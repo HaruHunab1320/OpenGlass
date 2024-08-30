@@ -3,108 +3,180 @@ import fs from "fs";
 import { keys } from "../keys";
 
 export async function transcribeAudio(audioPath: string) {
-    const audioBase64 = fs.readFileSync(audioPath, { encoding: 'base64' });
-    try {
-        const response = await axios.post("https://api.openai.com/v1/audio/transcriptions", {
-            audio: audioBase64,
-        }, {
-            headers: {
-                'Authorization': `Bearer ${keys.openai}`,  // Replace YOUR_API_KEY with your actual OpenAI API key
-                'Content-Type': 'application/json'
-            },
-        });
-        return response.data;
-    } catch (error) {
-        console.error("Error in transcribeAudio:", error);
-        return null; // or handle error differently
-    }
+  const audioBase64 = fs.readFileSync(audioPath, { encoding: "base64" });
+  try {
+    const response = await axios.post(
+      "https://api.openai.com/v1/audio/transcriptions",
+      {
+        audio: audioBase64,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${keys.openai}`, // Replace YOUR_API_KEY with your actual OpenAI API key
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error("Error in transcribeAudio:", error);
+    return null; // or handle error differently
+  }
 }
 
 let audioContext: AudioContext;
+let audioStream: MediaStream | null = null;
+let mediaRecorder: MediaRecorder | null = null;
+const audioChunks: Blob[] = [];
 
 export async function startAudio() {
+  try {
     audioContext = new AudioContext();
+    console.log("Audio context initialized successfully");
+
+    // Request microphone access
+    audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    console.log("Microphone access granted");
+
+    // Create a MediaRecorder instance
+    mediaRecorder = new MediaRecorder(audioStream);
+    console.log("MediaRecorder created");
+
+    // Set up event listeners
+    mediaRecorder.ondataavailable = (event) => {
+      audioChunks.push(event.data);
+      console.log(`Audio chunk received: ${event.data.size} bytes`);
+    };
+
+    mediaRecorder.onstart = () => {
+      console.log("MediaRecorder started");
+    };
+
+    mediaRecorder.onstop = () => {
+      console.log("MediaRecorder stopped");
+      const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+      console.log(`Total audio size: ${audioBlob.size} bytes`);
+      // Here you can add code to send the audioBlob to your server or process it further
+    };
+
+    // Start recording
+    mediaRecorder.start();
+    console.log("Audio recording started");
+  } catch (error) {
+    console.error("Error initializing audio:", error);
+    throw error;
+  }
+}
+
+export function stopAudio() {
+  if (mediaRecorder && mediaRecorder.state !== "inactive") {
+    mediaRecorder.stop();
+    console.log("Audio recording stopped");
+  }
+  if (audioStream) {
+    audioStream.getTracks().forEach((track) => track.stop());
+    console.log("Audio stream tracks stopped");
+  }
+  audioChunks.length = 0; // Clear the audio chunks
+  console.log("Audio chunks cleared");
 }
 
 export async function textToSpeech(text: string) {
-    try {
-        const response = await axios.post("https://api.openai.com/v1/audio/speech", {
-            input: text,    // Use 'input' instead of 'text'
-            voice: "nova",
-            model: "tts-1",
-        }, {
-            headers: {
-                'Authorization': `Bearer ${keys.openai}`,  // Replace YOUR_API_KEY with your actual OpenAI API key
-                'Content-Type': 'application/json'
-            },
-            responseType: 'arraybuffer'  // This will handle the binary data correctly
-        });
+  try {
+    console.log(`Sending text to speech: "${text}"`);
+    const response = await axios.post(
+      "https://api.openai.com/v1/audio/speech",
+      {
+        input: text, // Use 'input' instead of 'text'
+        voice: "nova",
+        model: "tts-1",
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${keys.openai}`, // Replace YOUR_API_KEY with your actual OpenAI API key
+          "Content-Type": "application/json",
+        },
+        responseType: "arraybuffer", // This will handle the binary data correctly
+      }
+    );
+    console.log("Received audio response from OpenAI");
 
+    // Decode the audio data asynchronously
+    const audioBuffer = await audioContext.decodeAudioData(response.data);
+    console.log(
+      `Decoded audio buffer: duration ${audioBuffer.duration} seconds`
+    );
 
-        // Decode the audio data asynchronously
-        const audioBuffer = await audioContext.decodeAudioData(response.data);
+    // Create an audio source
+    const source = audioContext.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioContext.destination);
+    source.start(); // Play the audio immediately
+    console.log("Started playing audio");
 
-        // Create an audio source
-        const source = audioContext.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(audioContext.destination);
-        source.start();  // Play the audio immediately
-
-        return response.data;
-    } catch (error) {
-        console.error("Error in textToSpeech:", error);
-        return null; // or handle error differently
-    }
+    return response.data;
+  } catch (error) {
+    console.error("Error in textToSpeech:", error);
+    return null; // or handle error differently
+  }
 }
 
 // Function to convert image to base64
 function imageToBase64(path: string) {
-    const image = fs.readFileSync(path, { encoding: 'base64' });
-    return `data:image/jpeg;base64,${image}`; // Adjust the MIME type if necessary (e.g., image/png)
+  const image = fs.readFileSync(path, { encoding: "base64" });
+  return `data:image/jpeg;base64,${image}`; // Adjust the MIME type if necessary (e.g., image/png)
 }
 
 export async function describeImage(imagePath: string) {
-    const imageBase64 = imageToBase64(imagePath);
-    try {
-        const response = await axios.post("https://api.openai.com/v1/images/descriptions", {
-            image: imageBase64,
-        }, {
-            headers: {
-                'Authorization': `Bearer ${keys.openai}`,  // Replace YOUR_API_KEY with your actual OpenAI API key
-                'Content-Type': 'application/json'
-            },
-        });
-        return response.data;
-    } catch (error) {
-        console.error("Error in describeImage:", error);
-        return null; // or handle error differently
-    }
+  const imageBase64 = imageToBase64(imagePath);
+  try {
+    const response = await axios.post(
+      "https://api.openai.com/v1/images/descriptions",
+      {
+        image: imageBase64,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${keys.openai}`, // Replace YOUR_API_KEY with your actual OpenAI API key
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error("Error in describeImage:", error);
+    return null; // or handle error differently
+  }
 }
 
 export async function gptRequest(systemPrompt: string, userPrompt: string) {
-    try {
-        const response = await axios.post("https://api.openai.com/v1/chat/completions", {
-            model: "gpt-4o",
-            messages: [
-                { role: "system", content: systemPrompt },
-                { role: "user", content: userPrompt },
-            ],
-        }, {
-            headers: {
-                'Authorization': `Bearer ${keys.openai}`,  // Replace YOUR_API_KEY with your actual OpenAI API key
-                'Content-Type': 'application/json'
-            },
-        });
-        return response.data;
-    } catch (error) {
-        console.error("Error in gptRequest:", error);
-        return null; // or handle error differently
-    }
+  try {
+    const response = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
+        model: "gpt-4o",
+        messages: [
+          { role: "system", content: systemPrompt },
+          { role: "user", content: userPrompt },
+        ],
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${keys.openai}`, // Replace YOUR_API_KEY with your actual OpenAI API key
+          "Content-Type": "application/json",
+        },
+      }
+    );
+    return response.data;
+  } catch (error) {
+    console.error("Error in gptRequest:", error);
+    return null; // or handle error differently
+  }
 }
 
-
-textToSpeech("Hello I am an agent")
-console.info(gptRequest(
+textToSpeech("Hello I am an agent");
+console.info(
+  gptRequest(
     `
                 You are a smart AI that need to read through description of a images and answer user's questions.
 
@@ -117,8 +189,7 @@ console.info(gptRequest(
                 DO NOT try to generalize or provide possible scenarios.
                 ONLY use the information in the description of the images to answer the question.
                 BE concise and specific.
-            `
-        ,
-            'where is the person?'
-
-))
+            `,
+    "where is the person?"
+  )
+);
