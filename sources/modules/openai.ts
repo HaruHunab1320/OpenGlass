@@ -1,35 +1,55 @@
 import axios from "axios";
-import fs from "fs";
 import { keys } from "../keys";
+import fs from "fs";
 
-export async function transcribeAudio(audioPath: string) {
-  const audioBase64 = fs.readFileSync(audioPath, { encoding: "base64" });
+export async function transcribeAudio(audioData: Blob) {
+  const formData = new FormData();
+  formData.append("file", audioData, "audio.wav");
+  formData.append("model", "whisper-1");
+
   try {
     const response = await axios.post(
       "https://api.openai.com/v1/audio/transcriptions",
-      {
-        audio: audioBase64,
-      },
+      formData,
       {
         headers: {
-          Authorization: `Bearer ${keys.openai}`, // Replace YOUR_API_KEY with your actual OpenAI API key
-          "Content-Type": "application/json",
+          Authorization: `Bearer ${keys.openai}`,
+          "Content-Type": "multipart/form-data",
         },
       }
     );
     return response.data;
   } catch (error) {
-    console.error("Error in transcribeAudio:", error);
-    return null; // or handle error differently
+    console.error("Error transcribing audio:", error);
+    throw error;
   }
 }
 
-let audioContext: AudioContext;
+// Helper function to convert Blob to base64
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onloadend = () => resolve(reader.result as string);
+    reader.onerror = reject;
+    reader.readAsDataURL(blob);
+  });
+}
+
+let audioContext: AudioContext | null = null;
+
+function getAudioContext(): AudioContext {
+  if (!audioContext) {
+    audioContext = new (window.AudioContext ||
+      (window as any).webkitAudioContext)();
+  }
+  return audioContext;
+}
+
 let audioStream: MediaStream | null = null;
 let mediaRecorder: MediaRecorder | null = null;
 const audioChunks: Blob[] = [];
 
-export async function startAudio() {
+export async function startAudio(onChunkRecorded: (chunk: Blob) => void) {
   try {
     audioContext = new AudioContext();
     console.log("Audio context initialized successfully");
@@ -38,14 +58,20 @@ export async function startAudio() {
     audioStream = await navigator.mediaDevices.getUserMedia({ audio: true });
     console.log("Microphone access granted");
 
-    // Create a MediaRecorder instance
-    mediaRecorder = new MediaRecorder(audioStream);
+    // Create a MediaRecorder instance with WebM/Opus encoding
+    mediaRecorder = new MediaRecorder(audioStream, {
+      mimeType: "audio/webm;codecs=opus",
+    });
     console.log("MediaRecorder created");
 
     // Set up event listeners
     mediaRecorder.ondataavailable = (event) => {
-      audioChunks.push(event.data);
-      console.log(`Audio chunk received: ${event.data.size} bytes`);
+      const chunk = event.data;
+      audioChunks.push(chunk);
+      console.log(
+        `Audio chunk received: ${chunk.size} bytes, type: ${chunk.type}`
+      );
+      onChunkRecorded(chunk); // Emit the chunk
     };
 
     mediaRecorder.onstart = () => {
@@ -54,13 +80,14 @@ export async function startAudio() {
 
     mediaRecorder.onstop = () => {
       console.log("MediaRecorder stopped");
-      const audioBlob = new Blob(audioChunks, { type: "audio/wav" });
+      const audioBlob = new Blob(audioChunks, {
+        type: "audio/webm;codecs=opus",
+      });
       console.log(`Total audio size: ${audioBlob.size} bytes`);
-      // Here you can add code to send the audioBlob to your server or process it further
     };
 
-    // Start recording
-    mediaRecorder.start();
+    // Start recording and emit chunks every 1 second
+    mediaRecorder.start(1000);
     console.log("Audio recording started");
   } catch (error) {
     console.error("Error initializing audio:", error);
@@ -101,16 +128,18 @@ export async function textToSpeech(text: string) {
     );
     console.log("Received audio response from OpenAI");
 
+    const context = getAudioContext();
+
     // Decode the audio data asynchronously
-    const audioBuffer = await audioContext.decodeAudioData(response.data);
+    const audioBuffer = await context.decodeAudioData(response.data);
     console.log(
       `Decoded audio buffer: duration ${audioBuffer.duration} seconds`
     );
 
     // Create an audio source
-    const source = audioContext.createBufferSource();
+    const source = context.createBufferSource();
     source.buffer = audioBuffer;
-    source.connect(audioContext.destination);
+    source.connect(context.destination);
     source.start(); // Play the audio immediately
     console.log("Started playing audio");
 
